@@ -3,8 +3,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import mapboxgl from 'mapbox-gl';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
-import awsconfig from './aws-exports'; // your generated aws-exports file
+import awsconfig from './aws-exports';
 import { Amplify } from 'aws-amplify';
+import GIF from 'gif.js';
 
 mapboxgl.accessToken ="pk.eyJ1IjoiaHlmaWRldiIsImEiOiJjbHAwOTY0dDUwNWN4MnFwM3pwcW5heGVkIn0.c_0f7jrsxO_xCPLD9MF2cg"
 
@@ -19,6 +20,66 @@ function App() {
     const [animationIntervalId, setAnimationIntervalId] = useState(null);
     const mapContainerRef = useRef(null);
     const mapInitialized = useRef(false);  // Ref to track if map has been initialized
+    const capturedFrames = [];
+
+    const captureFrame = () => {
+        // Check if map exists and is loaded
+        if (!map || !map.isStyleLoaded()) {
+            console.error('Map is not loaded yet');
+            return;
+        }
+    
+        try {
+            // Get the map's canvas
+            const canvas = map.getCanvas();
+    
+            // Use the toDataURL method to get the image data
+            const imageData = canvas.toDataURL('image/png');
+    
+            // You can now store this imageData, which is a base64-encoded string of the map's current view
+            return imageData;
+        } catch (error) {
+            console.error('Error capturing map frame:', error);
+        }
+    };
+
+
+    // Function to preload raster images
+    const preloadRasters = async (rasterLinks) => {
+        const preloadPromises = rasterLinks.map((link) => {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => resolve(link);
+                img.onerror = () => reject(new Error(`Failed to preload ${link}`));
+                img.src = link;
+            });
+        });
+
+        try {
+            await Promise.all(preloadPromises);
+            console.log('All raster images preloaded');
+        } catch (error) {
+            console.error('Error preloading raster images:', error);
+        }
+};
+
+
+const createGIF = () => {
+    const gif = new GIF({
+        workers: 2,
+        quality: 10
+    });
+
+    capturedFrames.forEach(frame => {
+        gif.addFrame(frame, {delay: 1000}); // Adjust delay as needed
+    });
+
+    gif.on('finished', function(blob) {
+        window.open(URL.createObjectURL(blob));
+    });
+
+    gif.render();
+};
 
 
     const handleSelectDates = () => {
@@ -90,6 +151,7 @@ function App() {
 
             // Add raster layers to the map
             addRasterLayersToMap(rasterLinks);
+            createGIF()
 
             // TODO: Implement GIF generation logic
         } catch (error) {
@@ -115,6 +177,13 @@ function App() {
         let currentLayerIndex = 0;
         const totalLayers = rasterLinks.length;
         let dateTimeDisplay; // Element to display date and time
+    
+        // Preload the raster images
+        preloadRasters(rasterLinks).then(() => {
+            // Once all rasters are preloaded, start updating the layers
+            updateLayer();
+        });
+
     
         const addLayer = (index) => {
             const layerId = 'raster-' + index.toString();
@@ -170,19 +239,24 @@ function App() {
             clearInterval(animationIntervalId);
         }
     
-        // Start the animation
-        const animationInterval = setInterval(updateLayer, 1000); // Adjust time as needed
-        setAnimationIntervalId(animationInterval);
+        // Start the animation after the rasters are preloaded
+        // Note: The setInterval is now initiated after preloading is complete
+        let animationInterval;
+        preloadRasters(rasterLinks).then(() => {
+            animationInterval = setInterval(updateLayer, 500); // Adjust time as needed
+            setAnimationIntervalId(animationInterval);
+        });
     };
     
+    // Modify the useEffect hook or wherever you start the animation
     useEffect(() => {
         if (map && selectedDates) {
-            const updateLayers = () => {
-                // Add new raster layers
+            const updateLayers = async () => {
                 const rasterLinks = generateFileNames(selectedDates.start, selectedDates.end);
+                await preloadRasters(rasterLinks); // Preload rasters
                 addRasterLayersToMap(rasterLinks);
             };
-    
+
             if (map.isStyleLoaded()) {
                 updateLayers();
             } else {
@@ -190,6 +264,7 @@ function App() {
             }
         }
     }, [selectedDates, map]); // Depend on both selectedDates and map
+
     return (
         <div className="App">
             <h1>Weekly Update GIF Generator</h1>
